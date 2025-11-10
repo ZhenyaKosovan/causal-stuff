@@ -1,0 +1,5 @@
+useDynLib(syntheticdid, .registration = TRUE)
+importFrom(Rcpp, evalCpp)
+export(did_att, did_event_agg)
+export(sc_weights)
+export(sdid_fit, sdid_att)
