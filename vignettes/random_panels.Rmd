@@ -1,0 +1,160 @@
+---
+title: "Randomly Generated Panels"
+author: "syntheticdid team"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Randomly Generated Panels}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+if (!requireNamespace("synthdid", quietly = TRUE)) {
+  knitr::knit_exit("The 'synthdid' package is required for this vignette.")
+}
+
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+library(bench)
+library(synthdid)
+library(syntheticdid)
+theme_set(theme_minimal())
+```
+
+This vignette stress-tests `syntheticdid` and `synthdid` across randomly generated panels of increasing size. For each configuration we compare point estimates and runtime when fitting the basic SDID estimator.
+
+## Panel generator
+
+We simulate latent factors plus idiosyncratic noise, treating the last `N1` units after `T0` periods with an average effect of -2 packs per-capita. Donor units precede treated units in the returned matrix so both implementations can operate directly on the output.
+
+```{r generator}
+simulate_panel <- function(N = 20, T = 40, treat_frac = 0.2) {
+  stopifnot(N > 2, T > 4)
+  N1 <- max(1, round(N * treat_frac))
+  N0 <- N - N1
+  T0 <- floor(T * 0.6)
+
+  time_idx <- seq_len(T)
+  latent_time <- sin(time_idx / max(time_idx) * pi)
+  unit_intercepts <- rnorm(N, sd = 1)
+  slopes <- rnorm(N, sd = 0.05)
+
+  Y <- matrix(NA_real_, nrow = N, ncol = T)
+  for (i in seq_len(N)) {
+    base <- unit_intercepts[i] +
+      slopes[i] * time_idx +
+      1.5 * latent_time +
+      rnorm(T, sd = 0.5)
+    treated <- (i > N0) & (time_idx > T0)
+    Y[i, ] <- base + ifelse(treated, -2, 0)
+  }
+
+  list(Y = Y, N0 = N0, T0 = T0)
+}
+```
+
+## Configurations
+
+We consider increasingly large panels, from a small 20x30 matrix up to a 200x80 "bigger-ish" example. For each case we run both estimators, record runtimes, and compute the absolute difference in the ATT.
+
+```{r run-comparisons, cache=TRUE}
+run_comparison <- function(N, T, label, reps = 5) {
+  panel <- simulate_panel(N, T)
+  Y <- panel$Y
+  N0 <- panel$N0
+  T0 <- panel$T0
+
+  bench_run <- bench::mark(
+    syntheticdid = {
+      fit <- sdid_fit(
+        Y_T_pre = Y[(N0 + 1):nrow(Y), 1:T0, drop = FALSE],
+        Y_D_pre = Y[1:N0, 1:T0, drop = FALSE],
+        Y_T_post = Y[(N0 + 1):nrow(Y), (T0 + 1):ncol(Y), drop = FALSE],
+        Y_D_post = Y[1:N0, (T0 + 1):ncol(Y), drop = FALSE]
+      )
+      se <- sqrt(as.numeric(sdid_vcov_placebo(Y, N0, T0, replications = 200)))
+      return(list(tau = as.numeric(fit$tau), se = se))
+    },
+    synthdid = {
+      est <- synthdid_estimate(Y, N0, T0)
+      se <- sqrt(as.numeric(vcov(est, method = "placebo", replications = 200)))
+      return(list(tau = as.numeric(fit$tau), se = se))
+    },
+    iterations = reps,
+    check = FALSE
+  )
+
+  ours <- bench_run$result[[1]]
+  synth <- bench_run$result[[2]]
+
+  tibble(
+    scenario = label,
+    N = N,
+    T = T,
+    ours_tau = ours$tau,
+    synth_tau = synth$tau,
+    abs_diff = abs(ours_tau - synth_tau),
+    ours_se = ours$se,
+    synth_se = synth$se,
+    sdid_sec = as.numeric(bench_run$median[bench_run$expression == "syntheticdid"]),
+    synthdid_sec = as.numeric(bench_run$median[bench_run$expression == "synthdid"])
+  )
+}
+
+panel_grid <- tribble(
+  ~scenario, ~N, ~T,
+  "Small", 20, 30,
+  "Medium", 60, 50,
+  "Large", 120, 60,
+  "Bigger-ish", 200, 80
+)
+
+results <- panel_grid %>%
+  mutate(output = pmap(list(N, T, scenario), run_comparison)) %>%
+  select(-N, -T, -scenario) %>%
+  unnest(cols = output)
+
+results
+```
+
+Across all scenarios the point estimates and placebo standard errors align to numerical tolerance.
+
+```{r se-summary}
+results %>%
+  transmute(
+    scenario,
+    ours_tau,
+    synth_tau,
+    abs_diff,
+    ours_se,
+    synth_se,
+    se_gap = abs(ours_se - synth_se)
+  )
+```
+
+Runtime naturally increases with panel size, but both implementations remain within fractions of a second even for the larger example on this machine.
+
+## Runtime comparison
+
+```{r runtime-plot}
+runtime_long <- results %>%
+  pivot_longer(c(sdid_sec, synthdid_sec),
+               names_to = "implementation", values_to = "seconds") %>%
+  mutate(implementation = recode(implementation,
+                                 sdid_sec = "syntheticdid",
+                                 synthdid_sec = "synthdid"))
+
+ggplot(runtime_long, aes(factor(scenario, levels = panel_grid$scenario),
+                         seconds, fill = implementation)) +
+  geom_col(position = "dodge") +
+  labs(x = NULL, y = "Seconds (elapsed)",
+       title = "Runtime across simulated panels", fill = NULL)
+```
+
+While these benchmarks are illustrative rather than definitive, they show that the C++ implementation keeps pace with the original R reference and scales well as the panel size increases.

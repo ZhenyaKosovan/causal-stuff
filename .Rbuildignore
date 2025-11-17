@@ -1,2 +1,7 @@
 ^.*\.Rproj$
 ^\.Rproj\.user$
+^doc$
+^benchmark_simplex_methods\.html$
+^\.Rhistory$
+^syntheticdid\.Rcheck$
+^syntheticdid_.*\.tar\.gz$

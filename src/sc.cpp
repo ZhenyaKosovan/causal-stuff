@@ -51,14 +51,16 @@ Rcpp::NumericVector sc_pg_simplex(const arma::mat &X,
   double f_old = arma::datum::inf;
 
   for (int it = 0; it < maxit; ++it) {
-    arma::vec Xw = X * w;                        // fitted path under current w
-    arma::vec grad = X.t() * (Xw - y) + lambda * w; // gradient of objective
+    arma::vec Xw = X.t() * w; // donor-weighted treated path (length T)
+    arma::vec grad = X * (Xw - y) + lambda * w; // gradient of objective
 
     // Unconstrained descent step, then projection brings us back to simplex.
     arma::vec w_new = project_simplex(w - step * grad);
 
     // Evaluate new objective to check for relative progress.
-    double f_new = 0.5 * arma::dot(Xw - y, Xw - y) + 0.5 * lambda * arma::dot(w, w);
+    arma::vec Xw_new = X.t() * w_new;
+    double f_new = 0.5 * arma::dot(Xw_new - y, Xw_new - y)
+      + 0.5 * lambda * arma::dot(w_new, w_new);
 
     if (rel_improve(f_old, f_new) < tol) {
       w = w_new;
@@ -111,17 +113,19 @@ Rcpp::NumericVector sc_pg_simplex_cov(const arma::mat &X,
   double f_old = arma::datum::inf;
 
   for (int it = 0; it < maxit; ++it) {
-    arma::vec Xw = X * w;
-    arma::vec Zw = Z * w;
-    arma::vec grad = X.t() * (Xw - y)
-      + kappa * Z.t() * (Zw - z)
+    arma::vec Xw = X.t() * w;
+    arma::vec Zw = Z.t() * w;
+    arma::vec grad = X * (Xw - y)
+      + kappa * Z * (Zw - z)
       + lambda * w;
 
     arma::vec w_new = project_simplex(w - step * grad);
 
-    double f_new = 0.5 * arma::dot(Xw - y, Xw - y)
-      + 0.5 * kappa * arma::dot(Zw - z, Zw - z)
-      + 0.5 * lambda * arma::dot(w, w);
+    arma::vec Xw_new = X.t() * w_new;
+    arma::vec Zw_new = Z.t() * w_new;
+    double f_new = 0.5 * arma::dot(Xw_new - y, Xw_new - y)
+      + 0.5 * kappa * arma::dot(Zw_new - z, Zw_new - z)
+      + 0.5 * lambda * arma::dot(w_new, w_new);
 
     if (rel_improve(f_old, f_new) < tol) {
       w = w_new;

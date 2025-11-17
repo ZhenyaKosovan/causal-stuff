@@ -17,7 +17,11 @@
     .Call(`_syntheticdid_time_weights_pg`, mu, lambda, maxit, tol)
 }
 
-.sdid_panel_att <- function(id, t, y, g, L, F, min_cov, lambda_unit, lambda_time, maxit, tol) {
-    .Call(`_syntheticdid_sdid_panel_att`, id, t, y, g, L, F, min_cov, lambda_unit, lambda_time, maxit, tol)
+.sdid_fit_cohort <- function(Y_T_pre, Y_D_pre, Y_T_post, Y_D_post, lambda_unit, use_unit_default, lambda_time, use_time_default, maxit, tol, min_decrease, use_min_default, unit_warm, time_warm) {
+    .Call(`_syntheticdid_sdid_fit_cohort`, Y_T_pre, Y_D_pre, Y_T_post, Y_D_post, lambda_unit, use_unit_default, lambda_time, use_time_default, maxit, tol, min_decrease, use_min_default, unit_warm, time_warm)
+}
+
+.sdid_panel_att <- function(id, t, y, g, L, F, min_cov, lambda_unit, use_unit_default, lambda_time, use_time_default, maxit, tol, min_decrease, use_min_default) {
+    .Call(`_syntheticdid_sdid_panel_att`, id, t, y, g, L, F, min_cov, lambda_unit, use_unit_default, lambda_time, use_time_default, maxit, tol, min_decrease, use_min_default)
 }
 

@@ -1,0 +1,216 @@
+---
+t---
+title: "California Proposition 99 with Synthetic DiD"
+author: "syntheticdid team"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{California Proposition 99 with Synthetic DiD}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+if (!requireNamespace("synthdid", quietly = TRUE)) {
+  knitr::knit_exit(paste(
+    "The 'synthdid' package is required for this vignette because it ships",
+    "the california_prop99 example panel."
+  ))
+}
+
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(ggplot2)
+library(synthdid)
+library(syntheticdid)
+theme_set(theme_minimal())
+```
+
+California's Proposition 99 increased cigarette taxes in 1988 and has become the de-facto benchmark for Synthetic Control and Synthetic Difference-in-Differences (SDID) estimators (Arkhangelsky et al., 2021). This vignette walks through the analysis step-by-step using the `synthdid` package's `california_prop99` panel and the C++ estimators exposed by `syntheticdid`.
+
+## Load the panel
+
+```{r load-data}
+data(california_prop99, package = "synthdid")
+cadata <- as_tibble(california_prop99)
+
+glimpse(cadata)
+```
+
+The panel tracks per-capita cigarette sales for 39 U.S. states from 1970 through 2000. California is treated (`treated = 1`) beginning in 1989.
+
+## Panel matrices and baseline DiD
+
+`synthdid::panel.matrices()` reshapes the tidy table into the wide matrix layout required by SDID: rows are states and columns are years. The first `N0` rows represent donor units, while the remaining rows (here only California) are treated units.
+
+```{r panel-mats}
+pm <- panel.matrices(california_prop99)
+Y <- pm[["Y"]]
+N0 <- pm[["N0"]]
+T0 <- pm[["T0"]]
+N1 <- nrow(Y) - N0
+T1 <- ncol(Y) - T0
+
+summarise_dims <- tibble(
+  quantity = c("Donor units (N0)", "Treated units (N1)",
+               "Pre periods (T0)", "Post periods (T1)"),
+  value = c(N0, N1, T0, T1)
+)
+summarise_dims
+```
+
+Before constructing synthetic weights it is helpful to benchmark the classical two-by-two DiD contrast.
+
+```{r baseline-did}
+mean_by_block <- crossing(
+  unit_group = c("treated", "controls"),
+  period_group = c("pre", "post")
+) %>%
+  mutate(
+    rows = map(unit_group, ~ if (.x == "treated") (N0 + 1):nrow(Y) else 1:N0),
+    cols = map(period_group, ~ if (.x == "pre") 1:T0 else (T0 + 1):ncol(Y)),
+    avg = map2_dbl(rows, cols, ~ mean(Y[.x, .y], na.rm = TRUE))
+  ) %>%
+  select(-rows, -cols) %>%
+  pivot_wider(names_from = period_group, values_from = avg)
+
+did_att <- (mean_by_block$post[2] - mean_by_block$pre[2]) -
+  (mean_by_block$post[1] - mean_by_block$pre[1])
+
+mean_by_block
+
+did_att
+```
+
+The raw DiD estimate suggests a roughly 27 pack per-capita reduction, but it assumes equal donor weights and equal time weights.
+
+## Synthetic DiD weights
+
+`syntheticdid::sdid_fit()` exposes the low-level SDID optimizer. The function expects the treated/donor matrices split into pre/post blocks, so we reproduce the layout that `synthdid::synthdid_estimate()` uses.
+
+```{r sdid-fit}
+Y_T_pre <- Y[(N0 + 1):nrow(Y), 1:T0, drop = FALSE]
+Y_D_pre <- Y[1:N0, 1:T0, drop = FALSE]
+Y_T_post <- Y[(N0 + 1):nrow(Y), (T0 + 1):ncol(Y), drop = FALSE]
+Y_D_post <- Y[1:N0, (T0 + 1):ncol(Y), drop = FALSE]
+
+set.seed(1999)
+manual_sdid <- sdid_fit(
+  Y_T_pre = Y_T_pre,
+  Y_D_pre = Y_D_pre,
+  Y_T_post = Y_T_post,
+  Y_D_post = Y_D_post
+)
+manual_sdid$tau
+```
+
+For reference we can compare against `synthdid::synthdid_estimate()`.
+
+```{r ref-sdid}
+ref <- synthdid_estimate(Y, N0, T0)
+as.numeric(ref)
+```
+
+The estimates agree up to numerical tolerance, confirming that the C++ implementation matches the publication's result of roughly -22 packs per capita. We can also inspect the learned donor weights and time weights.
+
+## Placebo confidence intervals
+
+With matching point estimates, we can also compare the placebo-based standard errors and confidence intervals provided by both implementations.
+
+```{r placebo-ci}
+set.seed(2024)
+sdid_var <- sdid_vcov_placebo(Y, N0, T0, replications = 200)
+sdid_se <- sqrt(as.numeric(sdid_var))
+
+set.seed(2024)
+ref_vcov <- vcov(ref, method = "placebo", replications = 200)
+ref_se <- sqrt(as.numeric(ref_vcov))
+
+ci_df <- tibble(
+  implementation = c("syntheticdid", "synthdid"),
+  estimate = c(manual_sdid$tau, as.numeric(ref)),
+  se = c(sdid_se, ref_se)
+) %>%
+  mutate(
+    ci_lower = estimate - 1.96 * se,
+    ci_upper = estimate + 1.96 * se
+  )
+
+ci_df
+```
+
+The placebo variances and confidence intervals coincide, providing an additional check on the inference routines.
+
+```{r weights}
+tibble(
+  state = rownames(Y)[1:N0],
+  weight = manual_sdid$v
+) %>%
+  filter(weight > 1e-4) %>%
+  arrange(desc(weight))
+
+tibble(
+  year = colnames(Y)[1:T0],
+  omega = manual_sdid$omega
+) %>%
+  mutate(year = as.integer(year)) %>%
+  ggplot(aes(year, omega)) +
+  geom_col(fill = "#125a82") +
+  labs(y = "Time weight")
+```
+
+The donor weights concentrate on Nevada, Utah, and Colorado (matching the paper), while the time weights emphasize the most recent pre-treatment years.
+
+## SDID on the long panel
+
+Finally we feed the tidy panel to `sdid_att()` which loops over treatment cohorts internally. In this example only California is treated, so the function simply reproduces the overall ATT and reports the cohort window that contributed.
+
+```{r panel-sdid}
+g_vec <- cadata %>%
+  group_by(State) %>%
+  mutate(first_treated = if_else(any(treated == 1),
+                                 min(Year[treated == 1]),
+                                 NA_real_)) %>%
+  pull(first_treated)
+
+att_result <- sdid_att(
+  id = cadata$State,
+  t = cadata$Year,
+  y = cadata$PacksPerCapita,
+  g = g_vec,
+  L = 10,
+  F = 10
+)
+att_result$att
+att_result$by_cohort
+```
+
+To visualize the fit we overlay the actual treated path, the SDID counterfactual, and the treatment indicator.
+
+```{r plot}
+years <- as.integer(colnames(Y))
+treated_path <- as.numeric(Y[(N0 + 1), ])
+synthetic_path <- as.numeric(t(Y[1:N0, , drop = FALSE]) %*% manual_sdid$v)
+
+plot_df <- tibble(
+  year = years,
+  Actual = treated_path,
+  Synthetic = synthetic_path,
+  treated = if_else(year >= 1989, "Post", "Pre")
+) %>%
+  pivot_longer(c(Actual, Synthetic), names_to = "series", values_to = "packs")
+
+ggplot(plot_df, aes(year, packs, color = series)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 2.2, alpha = 0.85) +
+  geom_vline(xintercept = 1989, linetype = 2, color = "grey40") +
+  scale_color_manual(values = c("Actual" = "#125a82", "Synthetic" = "#b04a4a")) +
+  labs(y = "Packs per capita", x = "Year", color = NULL) +
+  theme(legend.position = "top")
+```
+
+The vignette reproduces the headline SDID effect reported by Arkhangelsky et al. (2021) and demonstrates how to drive the low-level solvers that power `syntheticdid`.

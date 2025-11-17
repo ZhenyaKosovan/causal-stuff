@@ -75,9 +75,33 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// sdid_fit_cohort
+Rcpp::List sdid_fit_cohort(const arma::mat& Y_T_pre, const arma::mat& Y_D_pre, const arma::mat& Y_T_post, const arma::mat& Y_D_post, const double lambda_unit, const bool use_unit_default, const double lambda_time, const bool use_time_default, const int maxit, const double tol, const double min_decrease, const bool use_min_default, const Rcpp::NumericVector& unit_warm, const Rcpp::NumericVector& time_warm);
+RcppExport SEXP _syntheticdid_sdid_fit_cohort(SEXP Y_T_preSEXP, SEXP Y_D_preSEXP, SEXP Y_T_postSEXP, SEXP Y_D_postSEXP, SEXP lambda_unitSEXP, SEXP use_unit_defaultSEXP, SEXP lambda_timeSEXP, SEXP use_time_defaultSEXP, SEXP maxitSEXP, SEXP tolSEXP, SEXP min_decreaseSEXP, SEXP use_min_defaultSEXP, SEXP unit_warmSEXP, SEXP time_warmSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type Y_T_pre(Y_T_preSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type Y_D_pre(Y_D_preSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type Y_T_post(Y_T_postSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type Y_D_post(Y_D_postSEXP);
+    Rcpp::traits::input_parameter< const double >::type lambda_unit(lambda_unitSEXP);
+    Rcpp::traits::input_parameter< const bool >::type use_unit_default(use_unit_defaultSEXP);
+    Rcpp::traits::input_parameter< const double >::type lambda_time(lambda_timeSEXP);
+    Rcpp::traits::input_parameter< const bool >::type use_time_default(use_time_defaultSEXP);
+    Rcpp::traits::input_parameter< const int >::type maxit(maxitSEXP);
+    Rcpp::traits::input_parameter< const double >::type tol(tolSEXP);
+    Rcpp::traits::input_parameter< const double >::type min_decrease(min_decreaseSEXP);
+    Rcpp::traits::input_parameter< const bool >::type use_min_default(use_min_defaultSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type unit_warm(unit_warmSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type time_warm(time_warmSEXP);
+    rcpp_result_gen = Rcpp::wrap(sdid_fit_cohort(Y_T_pre, Y_D_pre, Y_T_post, Y_D_post, lambda_unit, use_unit_default, lambda_time, use_time_default, maxit, tol, min_decrease, use_min_default, unit_warm, time_warm));
+    return rcpp_result_gen;
+END_RCPP
+}
 // sdid_panel_att
-Rcpp::List sdid_panel_att(const Rcpp::IntegerVector& id, const Rcpp::IntegerVector& t, const Rcpp::NumericVector& y, const Rcpp::IntegerVector& g, const int L, const int F, const double min_cov, const double lambda_unit, const double lambda_time, const int maxit, const double tol);
-RcppExport SEXP _syntheticdid_sdid_panel_att(SEXP idSEXP, SEXP tSEXP, SEXP ySEXP, SEXP gSEXP, SEXP LSEXP, SEXP FSEXP, SEXP min_covSEXP, SEXP lambda_unitSEXP, SEXP lambda_timeSEXP, SEXP maxitSEXP, SEXP tolSEXP) {
+Rcpp::List sdid_panel_att(const Rcpp::IntegerVector& id, const Rcpp::IntegerVector& t, const Rcpp::NumericVector& y, const Rcpp::IntegerVector& g, const int L, const int F, const double min_cov, const double lambda_unit, const bool use_unit_default, const double lambda_time, const bool use_time_default, const int maxit, const double tol, const double min_decrease, const bool use_min_default);
+RcppExport SEXP _syntheticdid_sdid_panel_att(SEXP idSEXP, SEXP tSEXP, SEXP ySEXP, SEXP gSEXP, SEXP LSEXP, SEXP FSEXP, SEXP min_covSEXP, SEXP lambda_unitSEXP, SEXP use_unit_defaultSEXP, SEXP lambda_timeSEXP, SEXP use_time_defaultSEXP, SEXP maxitSEXP, SEXP tolSEXP, SEXP min_decreaseSEXP, SEXP use_min_defaultSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -89,10 +113,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< const int >::type F(FSEXP);
     Rcpp::traits::input_parameter< const double >::type min_cov(min_covSEXP);
     Rcpp::traits::input_parameter< const double >::type lambda_unit(lambda_unitSEXP);
+    Rcpp::traits::input_parameter< const bool >::type use_unit_default(use_unit_defaultSEXP);
     Rcpp::traits::input_parameter< const double >::type lambda_time(lambda_timeSEXP);
+    Rcpp::traits::input_parameter< const bool >::type use_time_default(use_time_defaultSEXP);
     Rcpp::traits::input_parameter< const int >::type maxit(maxitSEXP);
     Rcpp::traits::input_parameter< const double >::type tol(tolSEXP);
-    rcpp_result_gen = Rcpp::wrap(sdid_panel_att(id, t, y, g, L, F, min_cov, lambda_unit, lambda_time, maxit, tol));
+    Rcpp::traits::input_parameter< const double >::type min_decrease(min_decreaseSEXP);
+    Rcpp::traits::input_parameter< const bool >::type use_min_default(use_min_defaultSEXP);
+    rcpp_result_gen = Rcpp::wrap(sdid_panel_att(id, t, y, g, L, F, min_cov, lambda_unit, use_unit_default, lambda_time, use_time_default, maxit, tol, min_decrease, use_min_default));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -102,7 +130,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_syntheticdid_sc_pg_simplex", (DL_FUNC) &_syntheticdid_sc_pg_simplex, 5},
     {"_syntheticdid_sc_pg_simplex_cov", (DL_FUNC) &_syntheticdid_sc_pg_simplex_cov, 8},
     {"_syntheticdid_time_weights_pg", (DL_FUNC) &_syntheticdid_time_weights_pg, 4},
-    {"_syntheticdid_sdid_panel_att", (DL_FUNC) &_syntheticdid_sdid_panel_att, 11},
+    {"_syntheticdid_sdid_fit_cohort", (DL_FUNC) &_syntheticdid_sdid_fit_cohort, 14},
+    {"_syntheticdid_sdid_panel_att", (DL_FUNC) &_syntheticdid_sdid_panel_att, 15},
     {NULL, NULL, 0}
 };
 

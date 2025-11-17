@@ -1,8 +1,8 @@
 Package: syntheticdid
-Title: What the Package Does (One Line, Title Case)
+Title: Synthetic Control and Difference-in-Differences Estimators
 Version: 0.0.0.9000
 Authors@R: 
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
+    person("Zhenya", "Kosovan", email = "zhenya@example.com", role = c("aut", "cre"))
 Description: Fast estimators for Difference-in-Differences (DID), Synthetic Control (SC),
     and Synthetic DiD (SDID). Core numerical routines are implemented in C++ via RcppArmadillo
     with optional OpenMP parallelization.
@@ -11,8 +11,19 @@ Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 Depends: R (>= 4.1.0)
-Imports: Rcpp (>= 1.0.12), stats, utils
+Imports: Rcpp (>= 1.0.12)
 LinkingTo: Rcpp, RcppArmadillo
-Suggests: data.table, Matrix, testthat (>= 3.0.0)
+Suggests: 
+    data.table,
+    Matrix,
+    testthat (>= 3.0.0),
+    synthdid,
+    dplyr,
+    tidyr,
+    purrr,
+    ggplot2,
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
 Config/testthat/edition: 3
 SystemRequirements: C++17, OpenMP (optional)

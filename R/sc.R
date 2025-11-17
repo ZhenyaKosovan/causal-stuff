@@ -32,19 +32,3 @@ sc_weights <- function(X, y, Z = NULL, z = NULL, cov_penalty = 0,
     .sc_pg_simplex(X, y, lambda, as.integer(maxit), tol)
   }
 }
-
-#' Synthetic Control donor weights (projected gradient on simplex)
-#'
-#' @param X matrix: donors-by-T (pre periods)
-#' @param y vector length T: treated pre path (or treated-group average)
-#' @param lambda ridge penalty (>=0)
-#' @param maxit iterations
-#' @param tol tolerance for relative improvement
-#' @return numeric vector of donor weights (nonnegative, sum to 1)
-#' @export
-sc_weights <- function(X, y, lambda = 1e-3, maxit = 5000L, tol = 1e-8) {
-  X <- as.matrix(X)
-  y <- as.numeric(y)
-  if (ncol(X) != length(y)) stop("X and y length mismatch")
-  .sc_pg_simplex(X, y, lambda, as.integer(maxit), tol)
-}

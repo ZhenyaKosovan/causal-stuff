@@ -22,13 +22,22 @@
 }
 
 
+#' Cohort-level difference-in-differences ATT
+#'
+#' Wrapper around [`.did_core()`] that provides defaults suited for typical
+#' +/- window aggregations.
+#'
+#' @inheritParams .did_core
+#' @return List with the overall `att` and a `by_cohort` data frame of cohort/time
+#'   specific estimates.
+#' @examples
+#' id <- rep(1:5, each = 8)
+#' t <- rep(2000:2007, times = 5)
+#' g <- c(rep(Inf, 3), rep(2004, 2))
+#' y <- rnorm(length(id))
+#' did_att(id, t, y, g, L = 2, F = 2)
 #' @export
 did_att <- function(id, t, y, g, L = 4L, F = 4L, min_cov = 0.8) {
   out <- .did_core(id, t, y, g, L, F, min_cov)
   out
 }
-
-
-#' (Optional) event-time aggregator placeholder
-#' @export
-did_event_agg <- function(...) stop("Not yet implemented in this prototype")

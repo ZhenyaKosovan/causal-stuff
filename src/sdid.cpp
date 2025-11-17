@@ -19,86 +19,328 @@
  * namespace for clarity and to give each piece detailed documentation.
  */
 
-namespace {
-
-/*
- * weighted_row_means
- * ------------------
- * Computes row-wise weighted averages of a matrix while gracefully handling
- * missing entries (NaN). Each row i is treated independently: we iterate over
- * columns, skip any column whose entry or weight is not finite, accumulate the
- * numerator (value * weight), and track the sum of usable weights. If a row
- * ends up with zero total weight, we leave the output as NaN to signal that
- * the row contains no reliable information for the requested weights.
- */
-arma::vec weighted_row_means(const arma::mat &M, const arma::vec &w) {
-  arma::vec out(M.n_rows, arma::fill::value(arma::datum::nan));
-  arma::uword cols = std::min<arma::uword>(M.n_cols, w.n_elem);
-  if (cols == 0) return out;
-
-  for (arma::uword i = 0; i < M.n_rows; ++i) {
-    double total = 0.0, sumw = 0.0;
-    for (arma::uword c = 0; c < cols; ++c) {
-      double weight = w[c];
-      double val = M(i, c);
-      if (!std::isfinite(val) || !std::isfinite(weight) || weight <= 0.0) continue;
-      total += weight * val;
-      sumw += weight;
-    }
-    if (sumw > 0.0) out[i] = total / sumw;
-  }
-  return out;
-}
-
-/*
- * weighted_col_means
- * ------------------
- * Mirrors the previous helper but aggregates along columns, i.e. each column
- * receives a weighted average across rows. This is used when we collapse donor
- * matrices into a single synthetic path given unit-level weights. Missing
- * entries are skipped the same way as above.
- */
-arma::vec weighted_col_means(const arma::mat &M, const arma::vec &v) {
-  arma::vec out(M.n_cols, arma::fill::value(arma::datum::nan));
-  arma::uword rows = std::min<arma::uword>(M.n_rows, v.n_elem);
-  if (rows == 0) return out;
-
-  for (arma::uword c = 0; c < M.n_cols; ++c) {
-    double total = 0.0, sumw = 0.0;
-    for (arma::uword r = 0; r < rows; ++r) {
-      double weight = v[r];
-      double val = M(r, c);
-      if (!std::isfinite(val) || !std::isfinite(weight) || weight <= 0.0) continue;
-      total += weight * val;
-      sumw += weight;
-    }
-    if (sumw > 0.0) out[c] = total / sumw;
-  }
-  return out;
-}
-
-/*
- * finite_mean
- * -----------
- * Given a vector that may contain NaN placeholders, return the average of the
- * finite subset. If all entries are missing we propagate NaN to signal that
- * the caller does not have enough information.
- */
-double finite_mean(const arma::vec &v) {
-  arma::uvec idx = arma::find_finite(v);
-  if (idx.is_empty()) return arma::datum::nan;
-  arma::vec vals = v.elem(idx);
-  return arma::mean(vals);
-}
-
-} // namespace
-
 // Forward declaration: implemented in sc.cpp and linked at build time
 Rcpp::NumericVector sc_pg_simplex(const arma::mat &X,
                                   const arma::vec &y,
                                   const double lambda = 1e-3,
                                   const int maxit = 5000,
                                   const double tol = 1e-8);
+
+namespace {
+
+double row_mean_ignore_nan(const arma::rowvec &row) {
+  double total = 0.0;
+  std::size_t count = 0;
+  for (double val : row) {
+    if (std::isfinite(val)) { total += val; ++count; }
+  }
+  if (count == 0) return arma::datum::nan;
+  return total / static_cast<double>(count);
+}
+
+double matrix_mean_ignore_nan(const arma::mat &M) {
+  double total = 0.0;
+  std::size_t count = 0;
+  for (double val : M) {
+    if (std::isfinite(val)) { total += val; ++count; }
+  }
+  if (count == 0) return arma::datum::nan;
+  return total / static_cast<double>(count);
+}
+
+double weighted_mean(const arma::vec &values, const arma::vec &weights) {
+  double total = 0.0, sumw = 0.0;
+  arma::uword n = std::min(values.n_elem, weights.n_elem);
+  for (arma::uword i = 0; i < n; ++i) {
+    double val = values[i];
+    double w = weights[i];
+    if (!std::isfinite(val) || !std::isfinite(w) || w <= 0.0) continue;
+    total += w * val;
+    sumw += w;
+  }
+  if (sumw <= 0.0) return arma::datum::nan;
+  return total / sumw;
+}
+
+double weighted_dot(const arma::vec &w, const arma::rowvec &series) {
+  double total = 0.0, sumw = 0.0;
+  arma::uword n = std::min<arma::uword>(w.n_elem, series.n_elem);
+  for (arma::uword i = 0; i < n; ++i) {
+    double weight = w[i];
+    double val = series[i];
+    if (!std::isfinite(weight) || weight <= 0.0 || !std::isfinite(val)) continue;
+    total += weight * val;
+    sumw += weight;
+  }
+  if (sumw <= 0.0) return arma::datum::nan;
+  return total / sumw;
+}
+
+arma::rowvec column_weighted_means(const arma::mat &M, const arma::vec &weights) {
+  arma::rowvec out(M.n_cols, arma::fill::value(arma::datum::nan));
+  for (arma::uword c = 0; c < M.n_cols; ++c) {
+    double total = 0.0, sumw = 0.0;
+    for (arma::uword r = 0; r < M.n_rows; ++r) {
+      double val = M(r, c);
+      double w = weights[r];
+      if (!std::isfinite(val) || !std::isfinite(w) || w <= 0.0) continue;
+      total += w * val;
+      sumw += w;
+    }
+    if (sumw > 0.0) out[c] = total / sumw;
+  }
+  return out;
+}
+
+double donor_noise_sd(const arma::mat &donors) {
+  if (donors.n_cols < 2 || donors.n_rows == 0) return 1.0;
+  std::vector<double> diffs;
+  diffs.reserve(donors.n_rows * (donors.n_cols - 1));
+  for (arma::uword r = 0; r < donors.n_rows; ++r) {
+    bool row_ok = true;
+    for (arma::uword c = 1; c < donors.n_cols; ++c) {
+      double prev = donors(r, c - 1);
+      double cur = donors(r, c);
+      if (!std::isfinite(prev) || !std::isfinite(cur)) { row_ok = false; break; }
+      diffs.push_back(cur - prev);
+    }
+    if (!row_ok) continue;
+  }
+  if (diffs.size() < 2) return 1.0;
+  double mean = 0.0;
+  for (double v : diffs) mean += v;
+  mean /= static_cast<double>(diffs.size());
+  double var = 0.0;
+  for (double v : diffs) {
+    double delta = v - mean;
+    var += delta * delta;
+  }
+  var /= static_cast<double>(diffs.size() - 1);
+  if (!(var > 0.0) || !std::isfinite(var)) return 1.0;
+  return std::sqrt(var);
+}
+
+arma::mat center_columns(const arma::mat &M) {
+  arma::mat out = M;
+  for (arma::uword c = 0; c < out.n_cols; ++c) {
+    double total = 0.0;
+    std::size_t count = 0;
+    for (arma::uword r = 0; r < out.n_rows; ++r) {
+      double val = out(r, c);
+      if (std::isfinite(val)) { total += val; ++count; }
+    }
+    if (count == 0) continue;
+    double mean = total / static_cast<double>(count);
+    for (arma::uword r = 0; r < out.n_rows; ++r) {
+      if (std::isfinite(out(r, c))) out(r, c) -= mean;
+    }
+  }
+  return out;
+}
+
+arma::mat filter_rows(const arma::mat &Y) {
+  std::vector<arma::uword> keep;
+  for (arma::uword r = 0; r < Y.n_rows; ++r) {
+    bool ok = true;
+    for (arma::uword c = 0; c < Y.n_cols; ++c) {
+      if (!std::isfinite(Y(r, c))) { ok = false; break; }
+    }
+    if (ok) keep.push_back(r);
+  }
+  arma::mat out(keep.size(), Y.n_cols);
+  for (std::size_t i = 0; i < keep.size(); ++i) out.row(i) = Y.row(keep[i]);
+  return out;
+}
+
+// Frank-Wolf Step for || Ax - b || ^2 + eta ||x||^2
+// with X on unit simplex
+arma::vec fw_step(const arma::mat &A,
+                  const arma::vec &lambda,
+                  const arma::vec &b,
+                  const double eta) {
+  arma::vec Ax = A * lambda;
+  // compute 1/2 drad of the objective function
+  arma::rowvec half_grad = (Ax - b).t() * A + eta * lambda.t();
+  // find the index of the dimension where gradient is the smallest
+  arma::uword idx = static_cast<arma::uword>(half_grad.index_min());
+  // We found `idx` of the vertex we need to move to
+  // Construct the direction
+  arma::vec direction = -lambda;
+  direction[idx] = 1.0 - lambda[idx];
+  // If we have nowhere to move -> exit
+  if (arma::all(direction == 0.0)) return lambda;
+
+  // This does 1-dimensional minimization of f(lambda + gamma * d) and
+  // projects it onto [0,1]
+  arma::vec derr = A.col(idx) - Ax;
+  // this is essentially construction of optimal unconstrained step
+  // gamma* = <grad(f(lambda)), d> / [2(||Ad||^2 + eta ||d||^2)]
+  double numerator = -arma::as_scalar(half_grad * direction);
+  double denom = arma::dot(derr, derr) + eta * arma::dot(direction, direction);
+  double step = denom > 0.0 ? numerator / denom : 0.0;
+  // project step onto [0,1]
+  double alpha = std::min(1.0, std::max(0.0, step));
+  // update next point
+  return lambda + alpha * direction;
+}
+
+arma::vec sparsify_weights(const arma::vec &w) {
+  arma::vec out = w;
+  double wmax = out.max();
+  if (!(wmax > 0.0)) return out;
+  double cutoff = wmax / 4.0;
+  for (arma::uword i = 0; i < out.n_elem; ++i) {
+    if (out[i] <= cutoff) out[i] = 0.0;
+  }
+  double sumw = arma::accu(out);
+  if (sumw > 0.0) out /= sumw;
+  return out;
+}
+
+arma::vec fw_optimize(const arma::mat &Y_aug,
+                      const double zeta,
+                      const double min_decrease,
+                      const int maxit,
+                      arma::vec lambda) {
+  if (Y_aug.n_cols < 2) return arma::vec();
+  arma::mat Y = center_columns(Y_aug);
+  Y = filter_rows(Y);
+  if (Y.n_rows == 0) return arma::vec();
+
+  arma::mat A = Y.cols(0, Y.n_cols - 2);
+  arma::vec b = Y.col(Y.n_cols - 1);
+  arma::uword T0 = A.n_cols;
+
+  if (lambda.n_elem != T0) {
+    lambda.set_size(T0);
+    lambda.fill(1.0 / static_cast<double>(T0));
+  }
+
+  double eta = static_cast<double>(A.n_rows) * zeta * zeta;
+  double prev = arma::datum::inf;
+  for (int it = 0; it < maxit; ++it) {
+    lambda = fw_step(A, lambda, b, eta);
+    arma::vec coeff(T0 + 1);
+    coeff.head(T0) = lambda;
+    coeff[T0] = -1.0;
+    arma::vec err = Y * coeff;
+    double val = zeta * zeta * arma::dot(lambda, lambda)
+      + arma::dot(err, err) / static_cast<double>(A.n_rows);
+    if (it >= 1 && (prev - val) <= (min_decrease * min_decrease)) break;
+    prev = val;
+  }
+  return lambda;
+}
+
+arma::vec clean_weights(const arma::mat &Y_aug,
+                        const double zeta,
+                        const double min_decrease,
+                        const int maxit,
+                        const arma::vec &warm_start) {
+  int pre_iters = std::min(100, maxit);
+  if (pre_iters < 1) pre_iters = 1;
+  arma::uword target = (Y_aug.n_cols > 0) ? (Y_aug.n_cols - 1) : 0;
+  arma::vec init = warm_start;
+  if (init.n_elem != target) init.reset();
+  arma::vec warm = fw_optimize(Y_aug, zeta, min_decrease, pre_iters, init);
+  arma::vec sparsified = sparsify_weights(warm);
+  return fw_optimize(Y_aug, zeta, min_decrease, maxit, sparsified);
+}
+
+struct CohortFitResult {
+  arma::vec unit_weights;
+  arma::vec time_weights;
+  double tau;
+};
+
+bool fit_sdid_cohort(const arma::mat &Y_T_pre,
+                     const arma::mat &Y_D_pre,
+                     const arma::mat &Y_T_post,
+                     const arma::mat &Y_D_post,
+                     const double lambda_unit,
+                     const bool use_unit_default,
+                     const double lambda_time,
+                     const bool use_time_default,
+                     const int maxit,
+                     const double tol,
+                     const double min_decrease_input,
+                     const bool use_min_decrease_default,
+                     const arma::vec &unit_warm,
+                     const arma::vec &time_warm,
+                     CohortFitResult &out) {
+  if (Y_T_pre.n_cols == 0 || Y_D_pre.n_cols == 0 || Y_T_post.n_cols == 0 || Y_D_post.n_cols == 0)
+    return false;
+
+  arma::uword N0 = Y_D_pre.n_rows;
+  arma::uword Tpre = Y_D_pre.n_cols;
+  arma::uword N1 = Y_T_pre.n_rows;
+  arma::uword Tpost = Y_D_post.n_cols;
+
+  if (N0 == 0 || Tpre == 0 || Tpost == 0) return false;
+
+  // Pre matrices must be fully observed; any NA/Inf should have been blocked in R.
+  if (!Y_T_pre.is_finite() || !Y_D_pre.is_finite()) return false;
+
+  double noise = donor_noise_sd(Y_D_pre);
+  if (!std::isfinite(noise) || noise <= 0.0) noise = 1.0;
+  double min_decrease = use_min_decrease_default ? (1e-5 * noise) : min_decrease_input;
+  if (!std::isfinite(min_decrease) || min_decrease <= 0.0) min_decrease = 1e-5;
+
+  double eta = std::pow(std::max(1.0, static_cast<double>(N1) * static_cast<double>(Tpost)), 0.25);
+  if (!std::isfinite(eta) || eta <= 0.0) eta = 1.0;
+
+  double zeta_unit = use_unit_default ? (eta * noise) : lambda_unit;
+  double zeta_time = use_time_default ? (1e-6 * noise) : lambda_time;
+  if (!std::isfinite(zeta_unit)) zeta_unit = eta * noise;
+  if (!std::isfinite(zeta_time)) zeta_time = 1e-6 * noise;
+
+  arma::mat collapsed(N0 + 1, Tpre + 1, arma::fill::value(arma::datum::nan));
+  collapsed(arma::span(0, N0 - 1), arma::span(0, Tpre - 1)) = Y_D_pre;
+
+  arma::vec donor_post_means(N0, arma::fill::value(arma::datum::nan));
+  for (arma::uword r = 0; r < N0; ++r)
+    donor_post_means[r] = row_mean_ignore_nan(Y_D_post.row(r));
+  collapsed(arma::span(0, N0 - 1), Tpre) = donor_post_means;
+
+  arma::rowvec treated_pre_means(Tpre, arma::fill::value(arma::datum::nan));
+  for (arma::uword c = 0; c < Tpre; ++c)
+    treated_pre_means[c] = row_mean_ignore_nan(Y_T_pre.col(c).t());
+  collapsed.row(N0).cols(0, Tpre - 1) = treated_pre_means;
+
+  double treated_post_mean = matrix_mean_ignore_nan(Y_T_post);
+  collapsed(N0, Tpre) = treated_post_mean;
+  if (!std::isfinite(treated_post_mean)) return false;
+
+  arma::vec time_start;
+  if (time_warm.n_elem == Y_D_pre.n_cols) time_start = time_warm;
+
+  arma::vec time_sub = clean_weights(collapsed.rows(0, N0 - 1), zeta_time, min_decrease, maxit, time_start);
+  if (time_sub.n_elem != Tpre) return false;
+
+  arma::vec unit_start = unit_warm;
+  if (unit_start.n_elem != N0) unit_start.reset();
+  arma::vec unit_sub = clean_weights(collapsed.cols(0, Tpre - 1).t(), zeta_unit, min_decrease, maxit, unit_start);
+  if (unit_sub.n_elem != N0) return false;
+
+  arma::vec time_full = time_sub;
+
+  arma::rowvec donor_pre = column_weighted_means(Y_D_pre, unit_sub);
+  double donor_pre_hat = weighted_dot(time_sub, donor_pre);
+  double treated_pre_hat = weighted_dot(time_sub, treated_pre_means);
+  double donor_post_hat = weighted_mean(donor_post_means, unit_sub);
+
+  if (!std::isfinite(donor_post_hat) || !std::isfinite(donor_pre_hat) || !std::isfinite(treated_pre_hat))
+    return false;
+
+  double tau = (treated_post_mean - treated_pre_hat) - (donor_post_hat - donor_pre_hat);
+
+  out.unit_weights = unit_sub;
+  out.time_weights = time_full;
+  out.tau = tau;
+  return std::isfinite(tau);
+}
+
+} // namespace
 
 // -----------------------------------------------------------------------------
 // Time weights for SDID via projected gradient on the simplex
@@ -159,6 +401,42 @@ Rcpp::NumericVector time_weights_pg(const arma::vec &mu,
 }
 
 // -----------------------------------------------------------------------------
+// Exported helpers
+// -----------------------------------------------------------------------------
+
+// [[Rcpp::export(name = ".sdid_fit_cohort")]]
+Rcpp::List sdid_fit_cohort(const arma::mat &Y_T_pre,
+                           const arma::mat &Y_D_pre,
+                           const arma::mat &Y_T_post,
+                           const arma::mat &Y_D_post,
+                           const double lambda_unit,
+                           const bool use_unit_default,
+                           const double lambda_time,
+                           const bool use_time_default,
+                           const int maxit,
+                           const double tol,
+                           const double min_decrease,
+                           const bool use_min_default,
+                           const Rcpp::NumericVector &unit_warm,
+                           const Rcpp::NumericVector &time_warm) {
+  arma::vec unit_init(unit_warm.begin(), unit_warm.size());
+  arma::vec time_init(time_warm.begin(), time_warm.size());
+  CohortFitResult res;
+  if (!fit_sdid_cohort(Y_T_pre, Y_D_pre, Y_T_post, Y_D_post,
+                       lambda_unit, use_unit_default,
+                       lambda_time, use_time_default,
+                       maxit, tol, min_decrease, use_min_default,
+                       unit_init, time_init, res)) {
+    Rcpp::stop("Insufficient overlap to fit SDID weights");
+  }
+  return Rcpp::List::create(
+    Rcpp::Named("v") = res.unit_weights,
+    Rcpp::Named("omega") = res.time_weights,
+    Rcpp::Named("tau") = res.tau
+  );
+}
+
+// -----------------------------------------------------------------------------
 // Panel-level SDID with cohort windows (OpenMP across cohorts)
 // Inputs:
 //   id, t : 1-based integer codes
@@ -176,9 +454,13 @@ Rcpp::List sdid_panel_att(const Rcpp::IntegerVector &id,
                           const int F,
                           const double min_cov,
                           const double lambda_unit,
+                          const bool use_unit_default,
                           const double lambda_time,
+                          const bool use_time_default,
                           const int maxit,
-                          const double tol) {
+                          const double tol,
+                          const double min_decrease,
+                          const bool use_min_default) {
   const int N = id.size();
   if (!(N == t.size() && N == y.size() && N == g.size()))
     Rcpp::stop("Length mismatch among id, t, y, g");
@@ -228,9 +510,10 @@ Rcpp::List sdid_panel_att(const Rcpp::IntegerVector &id,
     // coverage helper
     auto coverage = [&](int unit, const std::vector<int> &win) {
       int obs = 0;
-      for (int tt : win)
+      for (int tt : win) {
         if (tt >= 1 && tt <= T_max && std::isfinite(Y[unit][tt])) ++obs;
-        return static_cast<double>(obs) / static_cast<double>(win.size());
+      }
+      return static_cast<double>(obs) / static_cast<double>(win.size());
     };
 
     // treated and donor sets
@@ -271,64 +554,15 @@ Rcpp::List sdid_panel_att(const Rcpp::IntegerVector &id,
       for (arma::uword c = 0; c < Tpost; ++c) { int tt = post_win[c]; if (tt>=1 && tt<=T_max)  Y_D_post(r,c) = Y[i][tt]; }
     }
 
-    // Columns with any NaN break the synthetic control solvers (the SVD and
-    // gradient calculations would produce NaNs). We therefore keep only the
-    // subset of pre-treatment periods that are fully observed across both
-    // treated and donor matrices.
-    std::vector<arma::uword> pre_keep;
-    pre_keep.reserve(Tpre);
-    for (arma::uword c = 0; c < Tpre; ++c) {
-      bool ok = true;
-      for (arma::uword r = 0; r < Y_T_pre.n_rows; ++r) {
-        if (!std::isfinite(Y_T_pre(r, c))) { ok = false; break; }
-      }
-      if (!ok) continue;
-      for (arma::uword r = 0; r < Y_D_pre.n_rows; ++r) {
-        if (!std::isfinite(Y_D_pre(r, c))) { ok = false; break; }
-      }
-      if (ok) pre_keep.push_back(c);
+    CohortFitResult res;
+    if (!fit_sdid_cohort(Y_T_pre, Y_D_pre, Y_T_post, Y_D_post,
+                         lambda_unit, use_unit_default,
+                         lambda_time, use_time_default,
+                         maxit, tol, min_decrease, use_min_default,
+                         arma::vec(), arma::vec(), res)) {
+      continue;
     }
-    if (pre_keep.empty()) continue;
-
-    arma::uvec pre_idx(pre_keep.size());
-    for (std::size_t j = 0; j < pre_keep.size(); ++j) pre_idx[j] = pre_keep[j];
-
-    // Unit weights (synthetic control) on the cleaned pre window. The target
-    // path is the average treated trajectory, so the donor combination mimics
-    // the treated group before treatment.
-    arma::rowvec y_tgt = arma::mean(Y_T_pre.cols(pre_idx), 0);
-    arma::vec v = Rcpp::as<arma::vec>(
-      sc_pg_simplex(Y_D_pre.cols(pre_idx), y_tgt.t(), lambda_unit, maxit, tol)
-    );
-
-    // Time weights learned on the same subset of periods. We extend the vector
-    // back to the full window length by filling zeros for dropped columns so
-    // that downstream code can still align weights with matrices that carry
-    // NAs in the excluded periods.
-    arma::mat combined = arma::join_cols(Y_T_pre.cols(pre_idx), Y_D_pre.cols(pre_idx));
-    arma::vec mu = arma::mean(combined, 0).t();
-    arma::vec omega = arma::zeros<arma::vec>(Tpre);
-    if (!pre_idx.is_empty()) {
-      arma::vec omega_sub = Rcpp::as<arma::vec>(
-        time_weights_pg(mu, lambda_time, maxit, tol)
-      );
-      omega.elem(pre_idx) = omega_sub;
-    }
-
-    // Collapse matrices into scalar summaries that respect both sets of weights
-    // and continue to ignore missing cells.
-    arma::vec treated_pre_means  = weighted_row_means(Y_T_pre,  omega);
-    arma::vec treated_post_means = weighted_row_means(Y_T_post, omega);
-    arma::vec donor_pre_means    = weighted_col_means(Y_D_pre,  v);
-    arma::vec donor_post_means   = weighted_col_means(Y_D_post, v);
-
-    double T_pre_hat_T  = finite_mean(treated_pre_means);
-    double T_post_hat_T = finite_mean(treated_post_means);
-    double C_pre_hat    = finite_mean(donor_pre_means);
-    double C_post_hat   = finite_mean(donor_post_means);
-
-    double tau = (T_post_hat_T - T_pre_hat_T) - (C_post_hat - C_pre_hat);
-    tau_g_buf[gg_idx] = tau;
+    tau_g_buf[gg_idx] = res.tau;
     n_treated_buf[gg_idx] = static_cast<int>(treated_ids.size());
   }
 
